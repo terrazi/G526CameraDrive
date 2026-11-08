@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build:
-    name: Build iOS App
+    name: Build iPhone App
     runs-on: macos-15
 
     steps:
@@ -25,7 +25,7 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build iOS Simulator App
+      - name: Build iPhone application
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_REVERSED_CLIENT_ID: ${{ secrets.GOOGLE_REVERSED_CLIENT_ID }}
@@ -34,20 +34,26 @@ jobs:
           xcodebuild \
             -project G526CameraDrive.xcodeproj \
             -scheme G526CameraDrive \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath build/DerivedData \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DeviceData \
             CODE_SIGNING_ALLOWED=NO \
             GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
             GOOGLE_REVERSED_CLIENT_ID="$GOOGLE_REVERSED_CLIENT_ID" \
             build 2>&1 | tee build.log
 
-      - name: Upload compiled application
-        if: success()
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/DeviceData/Build/Products/Debug-iphoneos/G526CameraDrive.app build/ipa/Payload/
+          cd build/ipa
+          ditto -c -k --sequesterRsrc --keepParent Payload G526CameraDrive-unsigned.ipa
+
+      - name: Upload iPhone IPA
         uses: actions/upload-artifact@v4
         with:
-          name: G526CameraDrive-iOS
-          path: build/DerivedData/Build/Products/Debug-iphonesimulator/G526CameraDrive.app
+          name: G526CameraDrive-iPhone-IPA
+          path: build/ipa/G526CameraDrive-unsigned.ipa
 
       - name: Upload build log
         if: always()
