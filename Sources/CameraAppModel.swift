@@ -3,23 +3,46 @@ import Foundation
 import SwiftUI
 import Speech
 import AVFoundation
+import GoogleSignIn
 
 @MainActor
 final class CameraAppModel: ObservableObject {
 
+    @Published var isLoggedIn = false
+    @Published var statusMessage = "Uygulamaya hoş geldiniz."
     @Published var status = "Kamera bağlantısı bekleniyor"
     @Published var isConnected = false
     @Published var isListening = false
     @Published var lastCommand = ""
+    @Published var isUploading = false
 
     private let camera = PPPPClient()
     private let audioEngine = AVAudioEngine()
 
-    private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "tr-TR"))
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var speechRecognizer =
+        SFSpeechRecognizer(locale: Locale(identifier: "tr-TR"))
+
+    private var recognitionRequest:
+        SFSpeechAudioBufferRecognitionRequest?
+
     private var recognitionTask: SFSpeechRecognitionTask?
 
-    var onOkeyDetected: (() -> Void)?
+    private var googleUser: GIDGoogleUser?
+
+    private var lastOkeyTime = Date.distantPast
+
+    func setGoogleUser(user: GIDGoogleUser) {
+        googleUser = user
+        isLoggedIn = true
+        statusMessage = "Google hesabına giriş yapıldı."
+    }
+
+    func signOut() {
+        GIDSignIn.sharedInstance.signOut()
+        googleUser = nil
+        isLoggedIn = false
+        statusMessage = "Google hesabından çıkış yapıldı."
+    }
 
     func connectCamera() {
         status = "Kameraya bağlanılıyor..."
@@ -31,11 +54,11 @@ final class CameraAppModel: ObservableObject {
                 switch result {
                 case .success:
                     self.isConnected = true
-                    self.status = "Kamera bağlantısı kuruldu"
+                    self.status = "Kamera bağlantısı kuruldu."
 
                 case .failure(let error):
                     self.isConnected = false
-                    self.status = "Bağlantı hatası: \(error.localizedDescription)"
+                    self.status = error.localizedDescription
                 }
             }
         }
@@ -44,45 +67,52 @@ final class CameraAppModel: ObservableObject {
     func disconnectCamera() {
         camera.disconnect()
         isConnected = false
-        status = "Kamera bağlantısı kesildi"
+        status = "Kamera bağlantısı kesildi."
     }
 
     func requestSpeechPermission() async -> Bool {
-        let speechStatus = await withCheckedContinuation {
-            (continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
 
-            SFSpeechRecognizer.requestAuthorization { result in
-                continuation.resume(returning: result)
+        let speechAuthorized =
+            await withCheckedContinuation {
+                (continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
+
+                SFSpeechRecognizer.requestAuthorization {
+                    result in
+                    continuation.resume(returning: result)
+                }
             }
-        }
 
-        let microphoneGranted = await withCheckedContinuation {
-            (continuation: CheckedContinuation<Bool, Never>) in
+        let microphoneAuthorized =
+            await withCheckedContinuation {
+                (continuation: CheckedContinuation<Bool, Never>) in
 
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                continuation.resume(returning: granted)
+                AVAudioSession.sharedInstance()
+                    .requestRecordPermission { granted in
+                        continuation.resume(returning: granted)
+                    }
             }
-        }
 
-        return speechStatus == .authorized && microphoneGranted
+        return speechAuthorized == .authorized &&
+            microphoneAuthorized
     }
 
     func startListening() async {
+
         guard !isListening else { return }
 
         guard await requestSpeechPermission() else {
-            status = "Mikrofon veya konuşma izni verilmedi"
+            status = "Mikrofon veya konuşma izni verilmedi."
             return
         }
 
-        guard let speechRecognizer,
-              speechRecognizer.isAvailable else {
-            status = "Türkçe konuşma tanıma kullanılamıyor"
+        guard let recognizer = speechRecognizer,
+              recognizer.isAvailable else {
+            status = "Türkçe ses tanıma kullanılamıyor."
             return
         }
 
         do {
-            try startRecognition(using: speechRecognizer)
+            try startRecognition(using: recognizer)
         } catch {
             status = "Ses başlatılamadı: \(error.localizedDescription)"
         }
@@ -91,21 +121,23 @@ final class CameraAppModel: ObservableObject {
     private func startRecognition(
         using recognizer: SFSpeechRecognizer
     ) throws {
+
         recognitionTask?.cancel()
         recognitionTask = nil
 
-        let audioSession = AVAudioSession.sharedInstance()
+        let session = AVAudioSession.sharedInstance()
 
-        try audioSession.setCategory(
+        try session.setCategory(
             .record,
             mode: .measurement,
-            options: .duckOthers
+            options: [.duckOthers]
         )
 
-        try audioSession.setActive(true)
+        try session.setActive(true)
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+
         recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
@@ -135,10 +167,10 @@ final class CameraAppModel: ObservableObject {
             guard let self else { return }
 
             if let result {
-                let spokenText = result.bestTranscription.formattedString
+                let text = result.bestTranscription.formattedString
 
                 Task { @MainActor in
-                    self.processVoiceCommand(spokenText)
+                    self.processVoiceCommand(text)
                 }
             }
 
@@ -151,6 +183,7 @@ final class CameraAppModel: ObservableObject {
     }
 
     private func processVoiceCommand(_ text: String) {
+
         lastCommand = text
 
         let normalized = text
@@ -161,16 +194,30 @@ final class CameraAppModel: ObservableObject {
             .lowercased()
 
         let words = normalized
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .components(
+                separatedBy: CharacterSet.alphanumerics.inverted
+            )
             .filter { !$0.isEmpty }
 
-        if words.contains("okey") || words.contains("okay") {
-            status = "Okey komutu algılandı"
-            onOkeyDetected?()
+        guard words.contains("okey") ||
+              words.contains("okay") else {
+            return
         }
+
+        guard Date().timeIntervalSince(lastOkeyTime) > 3 else {
+            return
+        }
+
+        lastOkeyTime = Date()
+
+        status = "Okey komutu algılandı."
+
+        // Fotoğraf çekme komutu, kamera protokolü doğrulandıktan
+        // sonra burada çalıştırılacaktır.
     }
 
     func stopListening() {
+
         if audioEngine.isRunning {
             audioEngine.stop()
         }
@@ -190,6 +237,6 @@ final class CameraAppModel: ObservableObject {
             options: .notifyOthersOnDeactivation
         )
 
-        status = "Sesli dinleme durduruldu"
+        status = "Sesli dinleme durduruldu."
     }
 }
