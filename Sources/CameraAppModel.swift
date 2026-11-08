@@ -59,7 +59,7 @@ final class CameraAppModel: ObservableObject {
         let microphoneGranted = await withCheckedContinuation {
             (continuation: CheckedContinuation<Bool, Never>) in
 
-            AVAudioApplication.requestRecordPermission { granted in
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
                 continuation.resume(returning: granted)
             }
         }
