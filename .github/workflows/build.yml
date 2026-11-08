@@ -1,0 +1,58 @@
+
+name: G526CameraDrive iOS Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build iOS App
+    runs-on: macos-15
+
+    steps:
+      - name: Get source code
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build iOS Simulator App
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_REVERSED_CLIENT_ID: ${{ secrets.GOOGLE_REVERSED_CLIENT_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project G526CameraDrive.xcodeproj \
+            -scheme G526CameraDrive \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            GOOGLE_REVERSED_CLIENT_ID="$GOOGLE_REVERSED_CLIENT_ID" \
+            build 2>&1 | tee build.log
+
+      - name: Upload compiled application
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: G526CameraDrive-iOS
+          path: build/DerivedData/Build/Products/Debug-iphonesimulator/G526CameraDrive.app
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: G526CameraDrive-Build-Log
+          path: build.log
+          if-no-files-found: ignore
